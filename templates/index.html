@@ -33,6 +33,10 @@
       <span id="sat-count" class="badge">{{ satellites|length }}</span>
     </div>
 
+    <div id="sat-search-row">
+      <input id="sat-search" type="text" placeholder="Caută satelit..." autocomplete="off" />
+    </div>
+
     <div id="sat-list">
       {% for sat_id, sat in satellites.items() %}
       <div class="sat-item" id="sat-item-{{ sat_id }}" data-sat="{{ sat_id }}" onclick="selectSatellite('{{ sat_id }}')">
@@ -198,6 +202,12 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="#29b6f6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8l-1.7 8.02c-.12.57-.46.71-.93.44l-2.57-1.89-1.24 1.19c-.14.13-.25.24-.51.24l.18-2.61 4.71-4.26c.21-.18-.04-.28-.32-.1L7.9 15.2l-2.49-.78c-.54-.17-.55-.54.11-.8l9.74-3.76c.45-.16.84.11.38.94z"/></svg>
         </a>
       </div>
+      <button id="freq-filter-btn" onclick="toggleFreqFilter()" title="Arată doar stații SDR compatibile cu frecvența satelitului selectat">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/>
+        </svg>
+        <span id="freq-filter-label">Filtru frecv.</span>
+      </button>
     </div>
   </main>
 </div>

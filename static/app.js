@@ -16,6 +16,7 @@
   let activeStationIds = new Set();
   let currentSat = "ISS";
   let eventSource = null;
+  let filterByFreq = false;
 
   // ------------------------------------------------------------------
   // Map init
@@ -170,6 +171,7 @@
         stationMarkers[st.id] = marker;
       }
     });
+    applyFreqFilter();
   }
 
   function updateStationMarkerStates(activeIds) {
@@ -180,11 +182,98 @@
       if (!m) return;
       const isActive = activeStationIds.has(st.id);
       const isNew = !!st.is_new;
-      m.setIcon(makeStationIcon(st.online, isActive, isNew));
-      m.setZIndexOffset(isActive ? 1000 : (isNew ? 500 : 0));
+      // Only update icon if marker is on the map; otherwise just store state
+      if (map.hasLayer(m)) {
+        m.setIcon(makeStationIcon(st.online, isActive, isNew));
+        m.setZIndexOffset(isActive ? 1000 : (isNew ? 500 : 0));
+      } else {
+        m.options.icon = makeStationIcon(st.online, isActive, isNew);
+        m.options.zIndexOffset = isActive ? 1000 : (isNew ? 500 : 0);
+      }
     });
-    document.getElementById("active-count").textContent = activeIds.length;
+    updateActiveCount(activeIds);
   }
+
+  function updateActiveCount(activeIds) {
+    const total = (activeIds || Array.from(activeStationIds)).length;
+    if (filterByFreq && total > 0) {
+      const visible = (activeIds || Array.from(activeStationIds)).filter(id => {
+        const m = stationMarkers[id];
+        return m && map.hasLayer(m);
+      }).length;
+      document.getElementById("active-count").textContent =
+        visible < total ? `${visible}/${total}` : total;
+    } else {
+      document.getElementById("active-count").textContent = total;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Frequency filter
+  // ------------------------------------------------------------------
+  function applyFreqFilter() {
+    if (!filterByFreq) {
+      stationsData.forEach(st => {
+        const m = stationMarkers[st.id];
+        if (m && !map.hasLayer(m)) {
+          m.addTo(map);
+          const isActive = activeStationIds.has(st.id);
+          m.setIcon(makeStationIcon(st.online, isActive, !!st.is_new));
+          m.setZIndexOffset(isActive ? 1000 : (st.is_new ? 500 : 0));
+        }
+      });
+      updateActiveCount();
+      return;
+    }
+
+    const satData = window.__SAT_DB ? window.__SAT_DB[currentSat] : null;
+    const downlinks = satData ? (satData.downlink || []) : [];
+
+    if (downlinks.length === 0) {
+      stationsData.forEach(st => {
+        const m = stationMarkers[st.id];
+        if (m && !map.hasLayer(m)) {
+          m.addTo(map);
+          const isActive = activeStationIds.has(st.id);
+          m.setIcon(makeStationIcon(st.online, isActive, !!st.is_new));
+          m.setZIndexOffset(isActive ? 1000 : (st.is_new ? 500 : 0));
+        }
+      });
+      updateActiveCount();
+      return;
+    }
+
+    stationsData.forEach(st => {
+      const m = stationMarkers[st.id];
+      if (!m) return;
+      const stFreqs = st.freqs || [];
+      const hasOverlap = downlinks.some(dl =>
+        stFreqs.some(fr => fr.low <= dl.freq && dl.freq <= fr.high)
+      );
+      if (hasOverlap) {
+        if (!map.hasLayer(m)) {
+          m.addTo(map);
+          // Restore icon state since setIcon is a no-op while off map
+          const isActive = activeStationIds.has(st.id);
+          m.setIcon(makeStationIcon(st.online, isActive, !!st.is_new));
+          m.setZIndexOffset(isActive ? 1000 : (st.is_new ? 500 : 0));
+        }
+      } else {
+        if (map.hasLayer(m)) map.removeLayer(m);
+      }
+    });
+    updateActiveCount();
+  }
+
+  window.toggleFreqFilter = function () {
+    filterByFreq = !filterByFreq;
+    const btn = document.getElementById("freq-filter-btn");
+    const lbl = document.getElementById("freq-filter-label");
+    if (btn) btn.classList.toggle("active", filterByFreq);
+    if (lbl) lbl.textContent = filterByFreq ? "Filtru: ACTIV" : "Filtru frecv.";
+    applyFreqFilter();
+    updateActiveCount();
+  };
 
   // ------------------------------------------------------------------
   // Station click handler
@@ -375,6 +464,9 @@
     currentSat = satId;
     window.__CURRENT_SAT = satId;
 
+    // Re-apply frequency filter for new satellite
+    if (filterByFreq) applyFreqFilter();
+
     // Clear old satellite marker
     clearSatelliteFromMap();
 
@@ -453,6 +545,26 @@
     initMap();
     loadSatDB();
     loadStations();
+
+    // Satellite search filter
+    const satSearchInput = document.getElementById("sat-search");
+    if (satSearchInput) {
+      satSearchInput.addEventListener("input", function () {
+        const q = this.value.toLowerCase().trim();
+        let visible = 0;
+        document.querySelectorAll(".sat-item").forEach(item => {
+          const name = (item.querySelector(".sat-name") || {}).textContent || "";
+          const agency = (item.querySelector(".badge-agency") || {}).textContent || "";
+          const orbit = (item.querySelector(".badge-orbit") || {}).textContent || "";
+          const match = !q || name.toLowerCase().includes(q) ||
+                        agency.toLowerCase().includes(q) ||
+                        orbit.toLowerCase().includes(q);
+          item.style.display = match ? "" : "none";
+          if (match) visible++;
+        });
+        document.getElementById("sat-count").textContent = q ? visible : document.querySelectorAll(".sat-item").length;
+      });
+    }
 
     // Default: select ISS
     setTimeout(() => {

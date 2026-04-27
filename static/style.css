@@ -58,9 +58,13 @@ html, body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   z-index: 10;
 }
+#sidebar::-webkit-scrollbar { width: 4px; }
+#sidebar::-webkit-scrollbar-track { background: transparent; }
+#sidebar::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
 
 #map-container {
   flex: 1;
@@ -138,8 +142,31 @@ html, body {
    Satellite List
    ============================================================ */
 
+#sat-search-row {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+#sat-search {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 5px 10px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+#sat-search::placeholder { color: var(--text-dim); }
+#sat-search:focus { border-color: var(--accent-dim); }
+
 #sat-list {
-  flex: 1;
+  height: 38vh;
+  min-height: 160px;
+  flex-shrink: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -555,6 +582,33 @@ html, body {
   pointer-events: all;
 }
 #tg-link:hover { opacity: 1; }
+
+#freq-filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(10,14,20,0.85);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  pointer-events: all;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+#freq-filter-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--text-primary);
+}
+#freq-filter-btn.active {
+  background: rgba(0,119,170,0.22);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* ============================================================
    Leaflet Customization

@@ -520,6 +520,43 @@ SAT_DB = {
         ],
         "notes": "GEO — poziție fixă pe cer! Necesită parabolă 60cm+ și downconverter LNB 10 GHz. Vizibil din România la elevație ~25° spre sud-vest.",
     },
+    # ── Meteorologie / Observare Pământ ─────────────────────────────────────
+    "NOAA-19": {
+        "norad": 33591, "name": "NOAA-19 (POES)",
+        "agency": "NOAA / SUA — Meteorologie", "orbit_type": "LEO ~870 km",
+        "description": "Satelit meteorologic polar operațional. Cel mai popular satelit SDR pentru imagini meteo reale cu antenă simplă 137 MHz.",
+        "downlink": [
+            {"freq": 137.100, "mode": "APT FM", "bandwidth": "34 kHz", "info": "Imagini meteo APT 120 linii/min — dipol V simplu"},
+            {"freq": 1702.500, "mode": "HRPT BPSK 1.5 Mbps", "bandwidth": "3 MHz", "info": "Imagini HD HRPT — necesită parabolă"},
+        ],
+        "uplink": [],
+        "beacon": [{"freq": 137.100, "mode": "APT FM", "info": "Transmisie continuă în trecere"}],
+        "notes": "Cel mai ușor satelit SDR pentru imagini meteo! Dipol V 137 MHz + WXtoImg/SatDump. 2-4 treceri/zi peste România.",
+    },
+    "NOAA-18": {
+        "norad": 28654, "name": "NOAA-18 (POES)",
+        "agency": "NOAA / SUA — Meteorologie", "orbit_type": "LEO ~870 km",
+        "description": "Al doilea satelit NOAA polar operațional. APT pe 137.9125 MHz și HRPT pe L-band 1707 MHz.",
+        "downlink": [
+            {"freq": 137.9125, "mode": "APT FM", "bandwidth": "34 kHz", "info": "Imagini meteo APT"},
+            {"freq": 1707.000, "mode": "HRPT BPSK", "bandwidth": "3 MHz", "info": "Imagini HD HRPT L-band"},
+        ],
+        "uplink": [],
+        "beacon": [{"freq": 137.9125, "mode": "APT FM", "info": "Transmisie continuă"}],
+        "notes": "Frecvență APT ușor diferită față de NOAA-19. Aceleași programe software (WXtoImg, SatDump).",
+    },
+    "METEOR-M2-2": {
+        "norad": 44387, "name": "Meteor-M 2-2 (Rusia)",
+        "agency": "Roscosmos — Meteorologie", "orbit_type": "LEO ~820 km",
+        "description": "Satelit meteorologic rus cu imagini color superioare față de NOAA APT. Transmite LRPT digital pe 137.9 MHz. Cel mai bun raport calitate/complexitate.",
+        "downlink": [
+            {"freq": 137.900, "mode": "LRPT QPSK 72 kbps", "bandwidth": "150 kHz", "info": "Imagini color LRPT — calitate mult mai bună decât APT"},
+            {"freq": 1700.000, "mode": "HRPT BPSK", "bandwidth": "3 MHz", "info": "HRPT full resolution"},
+        ],
+        "uplink": [],
+        "beacon": [{"freq": 137.900, "mode": "LRPT QPSK", "info": "Activ în trecere"}],
+        "notes": "Imagini color față de alb-negru APT! Necesită SatDump sau LeanHRPT pentru decodare LRPT. TLE: verificați actualizarea.",
+    },
     # ── Sateliți mai vechi / istorici ───────────────────────────────────────
     "UO-11": {
         "norad": 14781, "name": "UO-11 / UOSAT-2",
