@@ -1,0 +1,20 @@
+[Unit]
+Description=SDR Tracker — Sateliți Amatori în Timp Real (port 8810)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eae
+Group=eae
+WorkingDirectory=/home/eae/Documents/sdr_tracker
+Environment=HOME=/home/eae
+Environment=PATH=/home/eae/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/eae/Documents/sdr_tracker/.venv/bin/python /home/eae/Documents/sdr_tracker/server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/eae/Documents/sdr_tracker/server.log
+StandardError=append:/home/eae/Documents/sdr_tracker/server.log
+
+[Install]
+WantedBy=multi-user.target

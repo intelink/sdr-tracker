@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDR Tracker — Sateliți Amatori</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+<div id="app">
+  <!-- LEFT PANEL -->
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <div class="logo-row">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <circle cx="14" cy="14" r="13" stroke="#00d4ff" stroke-width="1.5" fill="none"/>
+          <circle cx="14" cy="14" r="3" fill="#00d4ff"/>
+          <line x1="14" y1="1" x2="14" y2="6" stroke="#00d4ff" stroke-width="1.5"/>
+          <line x1="14" y1="22" x2="14" y2="27" stroke="#00d4ff" stroke-width="1.5"/>
+          <line x1="1" y1="14" x2="6" y2="14" stroke="#00d4ff" stroke-width="1.5"/>
+          <line x1="22" y1="14" x2="27" y2="14" stroke="#00d4ff" stroke-width="1.5"/>
+          <ellipse cx="14" cy="14" rx="13" ry="5" stroke="#00d4ff" stroke-width="1" fill="none" opacity="0.4"/>
+        </svg>
+        <span class="logo-text">SDR Tracker</span>
+      </div>
+      <div class="sub-title">Sateliți Amatori în Timp Real</div>
+    </div>
+
+    <div id="sat-list-header">
+      <span>Sateliți Activi</span>
+      <span id="sat-count" class="badge">{{ satellites|length }}</span>
+    </div>
+
+    <div id="sat-list">
+      {% for sat_id, sat in satellites.items() %}
+      <div class="sat-item" id="sat-item-{{ sat_id }}" data-sat="{{ sat_id }}" onclick="selectSatellite('{{ sat_id }}')">
+        <div class="sat-item-header">
+          <div class="sat-name-row">
+            <span class="sat-dot" id="dot-{{ sat_id }}"></span>
+            <span class="sat-name">{{ sat.name }}</span>
+          </div>
+          <div class="sat-meta">
+            <span class="badge-agency">{{ sat.agency }}</span>
+            <span class="badge-orbit">{{ sat.orbit_type }}</span>
+          </div>
+        </div>
+        <div class="sat-details" id="details-{{ sat_id }}">
+          <p class="sat-desc">{{ sat.description }}</p>
+
+          {% if sat.downlink %}
+          <div class="freq-section">
+            <div class="freq-label">Downlink</div>
+            <table class="freq-table">
+              <tr><th>MHz</th><th>Bandă</th><th>Mod</th><th>BW SDR</th><th>Info</th></tr>
+              {% for dl in sat.downlink %}
+              <tr>
+                <td class="freq-val">{{ "%.3f"|format(dl.freq) }}</td>
+                <td><span class="band-badge">{{ dl.band }}</span></td>
+                <td>{{ dl.mode }}</td>
+                <td class="sdr-bw" title="{{ dl.sdr_hint }}">{{ dl.sdr_bw }}</td>
+                <td class="freq-info">{{ dl.info }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+          </div>
+          {% endif %}
+
+          {% if sat.uplink %}
+          <div class="freq-section">
+            <div class="freq-label uplink">Uplink</div>
+            <table class="freq-table">
+              <tr><th>MHz</th><th>Bandă</th><th>Mod</th><th>Info</th></tr>
+              {% for ul in sat.uplink %}
+              <tr>
+                <td class="freq-val uplink">{{ "%.3f"|format(ul.freq) }}</td>
+                <td><span class="band-badge uplink-band">{{ ul.band }}</span></td>
+                <td>{{ ul.mode }}</td>
+                <td class="freq-info">{{ ul.info }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+          </div>
+          {% endif %}
+
+          {% if sat.beacon %}
+          <div class="freq-section">
+            <div class="freq-label beacon">Beacon</div>
+            <table class="freq-table">
+              <tr><th>MHz</th><th>Bandă</th><th>Mod</th><th>BW SDR</th></tr>
+              {% for bc in sat.beacon %}
+              <tr>
+                <td class="freq-val beacon">{{ "%.3f"|format(bc.freq) }}</td>
+                <td><span class="band-badge beacon-band">{{ bc.band }}</span></td>
+                <td>{{ bc.mode }}</td>
+                <td class="sdr-bw" title="{{ bc.sdr_hint }}">{{ bc.sdr_bw }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+          </div>
+          {% endif %}
+
+          {% if sat.notes %}
+          <div class="sat-notes">
+            <span class="notes-icon">i</span>
+            {{ sat.notes }}
+          </div>
+          {% endif %}
+
+          <button class="btn-track" onclick="event.stopPropagation(); selectSatellite('{{ sat_id }}')">
+            Urmărește pe hartă
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Position panel -->
+    <div id="pos-panel">
+      <div class="pos-title">Poziție curentă: <span id="pos-sat-name">—</span></div>
+      <div class="pos-grid">
+        <div class="pos-item">
+          <span class="pos-label">Latitudine</span>
+          <span class="pos-val" id="pos-lat">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Longitudine</span>
+          <span class="pos-val" id="pos-lon">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Altitudine</span>
+          <span class="pos-val" id="pos-alt">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Footprint</span>
+          <span class="pos-val" id="pos-fp">—</span>
+        </div>
+      </div>
+      <div id="active-sdr-count">Stații SDR active: <span id="active-count">0</span></div>
+      <div id="stream-status">
+        <span class="status-dot" id="stream-dot"></span>
+        <span id="stream-text">Nicio urmărire activă</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAP -->
+  <main id="map-container">
+    <div id="map"></div>
+    <div id="map-overlay">
+      <div id="station-count-badge">
+        <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#22ff88" opacity="0.8"/></svg>
+        <span id="station-count-label">Stații SDR: încărcare...</span>
+      </div>
+      <div id="new-today-badge" style="display:none">
+        <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#ffd700" opacity="0.9"/></svg>
+        <span id="new-today-label">0 noi azi</span>
+        <a href="https://t.me/rx_tx_info" target="_blank" rel="noopener" id="tg-link" title="Canal Telegram @rx_tx_info">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#29b6f6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8l-1.7 8.02c-.12.57-.46.71-.93.44l-2.57-1.89-1.24 1.19c-.14.13-.25.24-.51.24l.18-2.61 4.71-4.26c.21-.18-.04-.28-.32-.1L7.9 15.2l-2.49-.78c-.54-.17-.55-.54.11-.8l9.74-3.76c.45-.16.84.11.38.94z"/></svg>
+        </a>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- AI Assistant Widget -->
+<div id="ai-widget">
+  <button id="ai-toggle" title="Asistent SDR AI" onclick="toggleAI()">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 2a7 7 0 0 1 7 7c0 2.5-1.3 4.7-3.3 6L15 21H9l-.7-6A7 7 0 0 1 5 9a7 7 0 0 1 7-7z"/>
+      <line x1="9" y1="21" x2="15" y2="21"/>
+    </svg>
+    <span id="ai-toggle-label">SDR AI</span>
+  </button>
+
+  <div id="ai-panel" class="ai-hidden">
+    <div id="ai-header">
+      <span id="ai-header-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#00d4ff" style="vertical-align:-2px;margin-right:5px">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="#00d4ff" stroke-width="2"/>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="#00d4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <circle cx="12" cy="17" r="1" fill="#00d4ff"/>
+        </svg>
+        Asistent SDR
+      </span>
+      <button id="ai-close" onclick="toggleAI()" title="Închide">✕</button>
+    </div>
+
+    <div id="ai-messages">
+      <div class="ai-msg ai-msg-bot">
+        <div class="ai-msg-content">
+          Bună! Sunt asistentul tău SDR. Te pot ajuta cu:<br>
+          • <strong>Recepție sateliți</strong> — setări frecvență, BW, modulație<br>
+          • <strong>Stații SDR</strong> — care e cea mai bună pentru satelitul curent<br>
+          • <strong>Explicații tehnice</strong> — APRS, FM, SSB, CW, SSTV...<br><br>
+          Selectează un satelit din stânga și întreabă-mă orice!
+        </div>
+      </div>
+    </div>
+
+    <div id="ai-input-row">
+      <textarea id="ai-input" placeholder="Întreabă ceva... (Enter = trimite)" rows="1"
+        onkeydown="handleAIKey(event)"></textarea>
+      <button id="ai-send" onclick="sendAIMessage()" title="Trimite">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
