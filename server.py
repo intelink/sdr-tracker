@@ -1051,80 +1051,267 @@ def api_satellite_tle(sat_id):
 
 
 CLAUDE_BIN = os.path.expanduser("~/.local/bin/claude")
+OLLAMA_URL = "http://localhost:11434"
+
+CLAUDE_MODELS = [
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "provider": "claude"},
+    {"id": "claude-sonnet-4-6",         "name": "Claude Sonnet 4.6", "provider": "claude"},
+    {"id": "claude-opus-4-7",           "name": "Claude Opus 4.7",   "provider": "claude"},
+]
+
+
+@app.route("/api/models")
+def api_models():
+    ollama_models = []
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        if r.ok:
+            skip = {"all-minilm", "mxbai-embed", "nomic-embed"}
+            for m in r.json().get("models", []):
+                name = m["name"]
+                if not any(s in name for s in skip):
+                    ollama_models.append({"id": name, "name": name, "provider": "ollama"})
+    except Exception:
+        pass
+    return jsonify({"claude": CLAUDE_MODELS, "ollama": ollama_models})
+
+
+def _search_stations(query: str, sat_info: dict, limit: int = 20) -> list:
+    """Search stations by query — extracts freq/location/type hints and scores matches."""
+    import re
+    q = query.lower()
+    stations = get_stations()
+    if not stations:
+        return []
+
+    # Extract frequency numbers from query
+    freq_hints = []
+    for m in re.findall(r'(\d+(?:\.\d+)?)\s*(?:mhz)?', q):
+        f = float(m)
+        if 0.5 <= f <= 10000:
+            freq_hints.append(f)
+    # Also use satellite downlink freqs if query mentions satellite
+    if sat_info:
+        for dl in sat_info.get("downlink", []):
+            freq_hints.append(dl["freq"])
+
+    # Country/location keywords from COUNTRY_COORDS keys
+    loc_hints = [k.lower() for k in COUNTRY_COORDS if k.lower() in q]
+
+    # SDR type hints
+    type_hints = []
+    for kw in ["kiwisdr", "kiwi", "websdr", "openwebrx"]:
+        if kw in q:
+            type_hints.append(kw)
+
+    # Band hints
+    band_vhf = any(x in q for x in ["vhf", "2m", "144", "145", "146"])
+    band_uhf = any(x in q for x in ["uhf", "70cm", "430", "435", "436", "437"])
+    band_hf  = any(x in q for x in ["hf", "shortwave", "40m", "20m", "80m", "10m"])
+
+    scored = []
+    for st in stations:
+        score = 0
+        name_lc = st["name"].lower()
+        stype_lc = st.get("type", "").lower()
+
+        # Frequency match (high value)
+        for fh in freq_hints:
+            for fr in st.get("freqs", []):
+                if fr["low"] <= fh <= fr["high"]:
+                    score += 12
+                    break
+
+        # Location match
+        for loc in loc_hints:
+            if loc in name_lc:
+                score += 8
+
+        # Type match
+        for th in type_hints:
+            if th in stype_lc or th in name_lc:
+                score += 6
+
+        # Band match
+        if band_vhf:
+            for fr in st.get("freqs", []):
+                if fr["low"] <= 145.8 <= fr["high"]:
+                    score += 5; break
+        if band_uhf:
+            for fr in st.get("freqs", []):
+                if fr["low"] <= 437.0 <= fr["high"]:
+                    score += 5; break
+        if band_hf:
+            for fr in st.get("freqs", []):
+                if fr["high"] <= 32:
+                    score += 5; break
+
+        # Generic word match
+        for word in q.split():
+            if len(word) > 3 and word in name_lc:
+                score += 3
+
+        if score > 0:
+            scored.append((score, st))
+
+    scored.sort(key=lambda x: (-x[0], not x[1].get("online", False)))
+    return [s[1] for s in scored[:limit]]
+
+
+def _station_line(st: dict, sat_info: dict) -> str:
+    """One-line compact station description with tuned URL."""
+    freqs = ", ".join(f"{f['low']:.0f}-{f['high']:.0f} MHz" for f in st.get("freqs", []))
+    best_freq = None
+    if sat_info:
+        for dl in sat_info.get("downlink", []):
+            for fr in st.get("freqs", []):
+                if fr["low"] <= dl["freq"] <= fr["high"]:
+                    best_freq = dl["freq"]; break
+            if best_freq:
+                break
+    tune = f"?tune={int(best_freq * 1000)}" if best_freq else ""
+    url = st.get("url", "").rstrip("/") + tune
+    return f"{st['name'][:45]} | {st.get('type','?')} | {freqs} | {url}"
+
+
+def _build_context(sat_id: str, active_ids: list, user_msg: str) -> str:
+    sat_info = SAT_DB.get(sat_id, {})
+    sat_name = sat_info.get("name", sat_id)
+
+    dl_lines = [f"  - {d['freq']} MHz {d['mode']} ({d.get('info','')})"
+                for d in sat_info.get("downlink", [])]
+    ul_lines = [f"  - {u['freq']} MHz {u['mode']}"
+                for u in sat_info.get("uplink", [])]
+
+    stations = get_stations()
+    st_map = {s["id"]: s for s in stations}
+    active_lines = [_station_line(st_map[sid], sat_info)
+                    for sid in active_ids[:10] if sid in st_map]
+
+    # Inject search results when query seems station-related
+    search_lines = []
+    search_kw = ["stați", "sdr", "caută", "găsești", "găsesc", "deschide", "link",
+                 "locați", "frecven", "unde", "european", "km", "ascult", "recepț",
+                 "online", "kiwi", "websdr", "openwebrx"]
+    if any(k in user_msg.lower() for k in search_kw):
+        found = _search_stations(user_msg, sat_info, limit=15)
+        search_lines = [_station_line(s, sat_info) for s in found]
+
+    NL = "\n"
+    dl_str = ", ".join("{} MHz {}".format(d["freq"], d["mode"]) for d in sat_info.get("downlink", []))
+    ul_str = ", ".join("{} MHz".format(u["freq"]) for u in sat_info.get("uplink", []))
+    ctx = (
+        "Satelit: {} | NORAD {} | {}\n".format(sat_name, sat_info.get("norad","?"), sat_info.get("orbit_type","?"))
+        + "Downlink: {}\n".format(dl_str or "(niciuna)")
+        + "Uplink: {}\n".format(ul_str or "(niciuna)")
+        + "Note: {}\n\n".format(sat_info.get("notes",""))
+        + "STATII ACTIVE ACUM IN FOOTPRINT ({}):\n".format(len(active_lines))
+        + (NL.join(active_lines) if active_lines else "  (niciuna)") + "\n"
+    )
+    if search_lines:
+        ctx += "\nREZULTATE CAUTARE STATII ({}):\n".format(len(search_lines)) + NL.join(search_lines)
+    return ctx
+
+
+@app.route("/api/stations/search")
+def api_stations_search():
+    q     = request.args.get("q", "")
+    freq  = request.args.get("freq", type=float)
+    stype = request.args.get("type", "")
+    limit = request.args.get("limit", 20, type=int)
+
+    # Build a synthetic query
+    query = q
+    if freq:
+        query += f" {freq} mhz"
+    if stype:
+        query += f" {stype}"
+
+    sat_info = {}  # no satellite context for generic search
+    results = _search_stations(query, sat_info, limit=limit)
+
+    # Filter by type if explicit
+    if stype:
+        results = [r for r in results if stype.lower() in r.get("type", "").lower()]
+
+    return jsonify({"results": results, "count": len(results)})
+
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    import subprocess
-    data = request.get_json(silent=True) or {}
-    user_msg  = (data.get("message") or "").strip()
-    sat_id    = (data.get("sat_id") or "ISS").upper()
+    data       = request.get_json(silent=True) or {}
+    user_msg   = (data.get("message") or "").strip()
+    sat_id     = (data.get("sat_id") or "ISS").upper()
     active_ids = data.get("active_stations", [])
+    model_id   = data.get("model", "claude-haiku-4-5-20251001")
+    provider   = data.get("provider", "claude")
 
     if not user_msg:
         return jsonify({"error": "Mesaj gol"}), 400
 
-    sat_info = SAT_DB.get(sat_id, {})
-    sat_name = sat_info.get("name", sat_id)
+    sat_ctx = _build_context(sat_id, active_ids, user_msg)
+    sat_name = SAT_DB.get(sat_id, {}).get("name", sat_id)
 
-    # Build context about current satellite
-    dl_lines = []
-    for dl in sat_info.get("downlink", []):
-        dl_lines.append(f"  - {dl['freq']} MHz / {dl['mode']} ({dl.get('info','')})")
-    ul_lines = []
-    for ul in sat_info.get("uplink", []):
-        ul_lines.append(f"  - {ul['freq']} MHz / {ul['mode']}")
-
-    # Active stations with URLs
-    stations = get_stations()
-    st_map = {s["id"]: s for s in stations}
-    active_info = []
-    for sid in active_ids[:8]:
-        s = st_map.get(sid)
-        if s:
-            freqs_str = ", ".join(f"{f['low']}-{f['high']} MHz" for f in s.get("freqs", []))
-            # Find best downlink freq match
-            best_freq = None
-            for dl in sat_info.get("downlink", []):
-                for fr in s.get("freqs", []):
-                    if fr["low"] <= dl["freq"] <= fr["high"]:
-                        best_freq = dl["freq"]
-                        break
-                if best_freq:
-                    break
-            tune_param = f"?tune={int(best_freq * 1000)}" if best_freq else ""
-            url = s.get("url", "").rstrip("/") + tune_param
-            active_info.append(
-                f"  - {s['name'][:50]} | {s.get('type','?')} | {freqs_str} | URL: {url}"
-            )
-
-    NL = "\n"
-    dl_text = NL.join(dl_lines) if dl_lines else "  (niciuna)"
-    ul_text = NL.join(ul_lines) if ul_lines else "  (niciuna)"
-    active_text = NL.join(active_info) if active_info else "  (niciuna momentan)"
-
-    sat_ctx = (
-        f"Satelit selectat: {sat_name} (NORAD {sat_info.get('norad','?')})\n"
-        f"Orbita: {sat_info.get('orbit_type','?')}\n"
-        f"Downlink:\n{dl_text}\n"
-        f"Uplink:\n{ul_text}\n"
-        f"Note: {sat_info.get('notes','')}\n"
-        f"Statii SDR active acum in footprint ({len(active_info)}):\n{active_text}"
+    system_prompt = (
+        "Ești un asistent expert în radioamatorism și SDR (Software Defined Radio), integrat în platforma SDR Tracker.\n"
+        "Cunoști: protocoale amatore (FM, SSB, CW, APRS, BPSK, FSK, SSTV, Codec2), sateliți amatori, "
+        "software SDR (WebSDR, KiwiSDR, OpenWebRX, SDR#, GQRX, SDR++), antene VHF/UHF.\n"
+        "Răspunzi în română, concis. Folosești markdown (bold, liste, linkuri).\n"
+        "IMPORTANT: Când menționezi o stație SDR, redă URL-ul ca link markdown: [Nume stație](URL). "
+        "Include ?tune=frecvență_hz în URL când e relevant. "
+        "Când explici setări: frecvența exactă, BW, modulație, CTCSS dacă e necesar.\n\n"
+        f"CONTEXT CURENT:\n{sat_ctx}"
     )
 
-    system_prompt = f"""Ești un asistent expert în radioamatorism și SDR (Software Defined Radio), integrat în platforma SDR Tracker.
-Cunoști bine: protocoale amatore (FM, SSB, CW, APRS, BPSK, FSK, SSTV, Codec2), sateliți amatori (AMSAT, ARISS, CubeSat), software SDR (WebSDR, KiwiSDR, OpenWebRX, SDR#, GQRX, SDR++), antene VHF/UHF și tehnici de recepție.
-Răspunzi în română, concis și la obiect. Folosești markdown pentru formatare (bold, liste).
-Când recomanzi o stație SDR, include URL-ul exact cu parametrul ?tune=frecvență_hz.
-Când explici setări SDR, menționează: frecvența exactă, lățimea de bandă (BW), modulația și orice ton CTCSS dacă e necesar.
+    prompt = f"[Satelit activ: {sat_name}]\n\n{user_msg}"
 
-CONTEXT CURENT:
-{sat_ctx}"""
+    def sse(text=None, done=False, error=None):
+        if error:
+            return f"data: {json.dumps({'error': error})}\n\n"
+        if done:
+            return f"data: {json.dumps({'done': True})}\n\n"
+        return f"data: {json.dumps({'text': text}, ensure_ascii=False)}\n\n"
 
-    prompt = f"[Context: utilizatorul urmărește {sat_name}]\n\n{user_msg}"
+    if provider == "ollama":
+        def gen_ollama():
+            try:
+                r = requests.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={
+                        "model": model_id,
+                        "stream": True,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user",   "content": prompt},
+                        ],
+                    },
+                    stream=True, timeout=120,
+                )
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    txt = ev.get("message", {}).get("content", "")
+                    if txt:
+                        yield sse(txt)
+                    if ev.get("done"):
+                        break
+            except Exception as e:
+                yield sse(error=str(e))
+            finally:
+                yield sse(done=True)
 
+        return Response(stream_with_context(gen_ollama()),
+                        mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # Claude CLI
     cmd = [
         CLAUDE_BIN, "-p",
-        "--model", "claude-haiku-4-5-20251001",
+        "--model", model_id,
         "--permission-mode", "bypassPermissions",
         "--output-format", "stream-json",
         "--verbose",
@@ -1133,7 +1320,7 @@ CONTEXT CURENT:
         prompt,
     ]
 
-    def gen():
+    def gen_claude():
         try:
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1152,19 +1339,16 @@ CONTEXT CURENT:
                     if se.get("type") == "content_block_delta":
                         d = se.get("delta", {})
                         if d.get("type") == "text_delta":
-                            txt = d.get("text", "")
-                            yield f"data: {json.dumps({'text': txt}, ensure_ascii=False)}\n\n"
+                            yield sse(d.get("text", ""))
             proc.wait(timeout=5)
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield sse(error=str(e))
         finally:
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            yield sse(done=True)
 
-    return Response(
-        stream_with_context(gen()),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return Response(stream_with_context(gen_claude()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/stream")

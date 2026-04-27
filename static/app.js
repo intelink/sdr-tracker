@@ -459,62 +459,114 @@
 (function () {
   "use strict";
 
-  let aiOpen = false;
-  let aiStreaming = false;
-  let aiCurrentBotEl = null;
-  let aiCurrentText = "";
+  let aiOpen      = false;
+  let aiStreaming  = false;
+  let aiCurrentEl = null;
+  let aiCurrentTxt = "";
+  let aiModel     = { id: "claude-haiku-4-5-20251001", provider: "claude" };
 
+  // ------------------------------------------------------------------
+  // Boot: load models into selector
+  // ------------------------------------------------------------------
+  document.addEventListener("DOMContentLoaded", function () {
+    fetch("/api/models")
+      .then(r => r.json())
+      .then(data => {
+        const sel = document.getElementById("ai-model-select");
+        sel.innerHTML = "";
+
+        // Claude group
+        if (data.claude && data.claude.length) {
+          const grp = document.createElement("optgroup");
+          grp.label = "Claude (Anthropic)";
+          data.claude.forEach(m => {
+            const opt = document.createElement("option");
+            opt.value = JSON.stringify({ id: m.id, provider: "claude" });
+            opt.textContent = m.name;
+            grp.appendChild(opt);
+          });
+          sel.appendChild(grp);
+        }
+
+        // Ollama group
+        if (data.ollama && data.ollama.length) {
+          const grp = document.createElement("optgroup");
+          grp.label = "Ollama (local)";
+          data.ollama.forEach(m => {
+            const opt = document.createElement("option");
+            opt.value = JSON.stringify({ id: m.id, provider: "ollama" });
+            opt.textContent = m.name;
+            grp.appendChild(opt);
+          });
+          sel.appendChild(grp);
+        }
+
+        sel.addEventListener("change", function () {
+          try { aiModel = JSON.parse(this.value); } catch (_) {}
+        });
+      })
+      .catch(() => {});
+  });
+
+  // ------------------------------------------------------------------
+  // Toggle panel
+  // ------------------------------------------------------------------
   window.toggleAI = function () {
     aiOpen = !aiOpen;
     const panel = document.getElementById("ai-panel");
-    if (aiOpen) {
-      panel.classList.remove("ai-hidden");
-      document.getElementById("ai-input").focus();
-    } else {
-      panel.classList.add("ai-hidden");
-    }
+    panel.classList.toggle("ai-hidden", !aiOpen);
+    if (aiOpen) document.getElementById("ai-input").focus();
   };
 
+  // ------------------------------------------------------------------
+  // Key handler (Enter send / auto-resize)
+  // ------------------------------------------------------------------
   window.handleAIKey = function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendAIMessage();
     }
-    // Auto-resize textarea
     const ta = document.getElementById("ai-input");
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 80) + "px";
   };
 
+  // ------------------------------------------------------------------
+  // Send message
+  // ------------------------------------------------------------------
   window.sendAIMessage = function () {
     if (aiStreaming) return;
     const input = document.getElementById("ai-input");
-    const msg = input.value.trim();
+    const msg   = input.value.trim();
     if (!msg) return;
 
     input.value = "";
     input.style.height = "auto";
-
     appendUserMsg(msg);
 
-    // Get current satellite and active stations from global state
-    const satId = window.__CURRENT_SAT || "ISS";
+    const satId     = window.__CURRENT_SAT || "ISS";
     const activeIds = window.__ACTIVE_STATION_IDS ? Array.from(window.__ACTIVE_STATION_IDS) : [];
 
-    startBotResponse();
+    startBotMsg();
 
     fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: msg, sat_id: satId, active_stations: activeIds }),
+      body: JSON.stringify({
+        message: msg,
+        sat_id: satId,
+        active_stations: activeIds,
+        model: aiModel.id,
+        provider: aiModel.provider,
+      }),
     }).then(resp => {
-      const reader = resp.body.getReader();
+      const reader  = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
 
       function pump() {
         reader.read().then(({ done, value }) => {
-          if (done) { finishBotResponse(); return; }
+          if (done) { finishBotMsg(); return; }
           buf += decoder.decode(value, { stream: true });
           const parts = buf.split("\n\n");
           buf = parts.pop();
@@ -523,76 +575,96 @@
             if (!line) continue;
             try {
               const ev = JSON.parse(line);
-              if (ev.text) appendBotChunk(ev.text);
-              if (ev.done) { finishBotResponse(); return; }
-              if (ev.error) { appendBotChunk("\n\n⚠ Eroare: " + ev.error); finishBotResponse(); return; }
+              if (ev.text)  { appendBotChunk(ev.text); }
+              if (ev.done)  { finishBotMsg(); return; }
+              if (ev.error) { appendBotChunk("\n\n⚠ " + ev.error); finishBotMsg(); return; }
             } catch (_) {}
           }
           pump();
-        }).catch(() => finishBotResponse());
+        }).catch(() => finishBotMsg());
       }
       pump();
     }).catch(err => {
-      appendBotChunk("⚠ Nu s-a putut contacta asistentul: " + err.message);
-      finishBotResponse();
+      appendBotChunk("⚠ Eroare conexiune: " + err.message);
+      finishBotMsg();
     });
   };
 
+  // ------------------------------------------------------------------
+  // Message rendering helpers
+  // ------------------------------------------------------------------
   function appendUserMsg(text) {
     const msgs = document.getElementById("ai-messages");
-    const div = document.createElement("div");
+    const div  = document.createElement("div");
     div.className = "ai-msg ai-msg-user";
-    div.innerHTML = `<div class="ai-msg-content">${escapeHtmlAI(text)}</div>`;
+    div.innerHTML = `<div class="ai-msg-content">${escHtml(text)}</div>`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
 
-  function startBotResponse() {
-    aiStreaming = true;
-    aiCurrentText = "";
+  function startBotMsg() {
+    aiStreaming  = true;
+    aiCurrentTxt = "";
     document.getElementById("ai-send").disabled = true;
 
     const msgs = document.getElementById("ai-messages");
-    const div = document.createElement("div");
+    const div  = document.createElement("div");
     div.className = "ai-msg ai-msg-bot";
     div.innerHTML = `<div class="ai-msg-content"><span class="ai-typing"><span></span><span></span><span></span></span></div>`;
     msgs.appendChild(div);
-    aiCurrentBotEl = div.querySelector(".ai-msg-content");
+    aiCurrentEl = div.querySelector(".ai-msg-content");
     msgs.scrollTop = msgs.scrollHeight;
   }
 
   function appendBotChunk(text) {
-    aiCurrentText += text;
-    const rendered = typeof marked !== "undefined"
-      ? marked.parse(aiCurrentText)
-      : escapeHtmlAI(aiCurrentText).replace(/\n/g, "<br>");
-    aiCurrentBotEl.innerHTML = rendered;
-    // Make external links open in new tab
-    aiCurrentBotEl.querySelectorAll("a[href]").forEach(a => {
-      a.target = "_blank";
-      a.rel = "noopener";
+    aiCurrentTxt += text;
+
+    let html = typeof marked !== "undefined"
+      ? marked.parse(aiCurrentTxt)
+      : escHtml(aiCurrentTxt).replace(/\n/g, "<br>");
+
+    aiCurrentEl.innerHTML = html;
+
+    // Convert plain links to station buttons; keep other links as-is
+    aiCurrentEl.querySelectorAll("a[href]").forEach(a => {
+      const href = a.getAttribute("href") || "";
+      const isStation = /^https?:\/\/.+(:\d+|sdr|websdr|kiwi|openwebrx)/i.test(href);
+      if (isStation) {
+        const btn = document.createElement("a");
+        btn.href      = href;
+        btn.target    = "_blank";
+        btn.rel       = "noopener";
+        btn.className = "ai-station-btn";
+        btn.innerHTML =
+          `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+             <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+             <path d="M8 12l3 3 5-5" stroke="currentColor" stroke-width="2" fill="none"/>
+           </svg> ${escHtml(a.textContent || href)}`;
+        a.replaceWith(btn);
+      } else {
+        a.target = "_blank";
+        a.rel    = "noopener";
+      }
     });
-    const msgs = document.getElementById("ai-messages");
-    msgs.scrollTop = msgs.scrollHeight;
+
+    document.getElementById("ai-messages").scrollTop = 99999;
   }
 
-  function finishBotResponse() {
+  function finishBotMsg() {
     aiStreaming = false;
     document.getElementById("ai-send").disabled = false;
-    if (aiCurrentBotEl && !aiCurrentText) {
-      aiCurrentBotEl.innerHTML = '<span style="color:var(--text-dim);font-size:11px">Fără răspuns</span>';
+    if (aiCurrentEl && !aiCurrentTxt) {
+      aiCurrentEl.innerHTML = '<span style="color:var(--text-dim);font-size:11px">Fără răspuns</span>';
     }
-    aiCurrentBotEl = null;
-    aiCurrentText = "";
+    aiCurrentEl  = null;
+    aiCurrentTxt = "";
     document.getElementById("ai-input").focus();
   }
 
-  function escapeHtmlAI(str) {
+  function escHtml(str) {
     return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
 })();
