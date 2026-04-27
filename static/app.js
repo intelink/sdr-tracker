@@ -28,6 +28,7 @@
       worldCopyJump: false,
       maxBounds: [[-90, -400], [90, 400]],
     });
+    window.__MAP = map;
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -317,6 +318,11 @@
 
     // Update sidebar dot for selected satellite
     updateSatDots(data.sat_id, data.active_stations || []);
+
+    // Observer geometry
+    if (data.observer) {
+      updateObserverGeo(data.observer);
+    }
   }
 
   function updateSatDots(satId, activeStations) {
@@ -371,6 +377,12 @@
 
     // Clear old satellite marker
     clearSatelliteFromMap();
+
+    // Update ground track and pass predictions
+    updateGroundTrack(satId);
+    loadPasses(satId);
+    document.getElementById("passes-sat-name").textContent =
+      satNameEl ? satNameEl.textContent.slice(0, 20) : satId;
 
     // Start SSE
     startStream(satId);
@@ -666,5 +678,306 @@
       .replace(/&/g, "&amp;").replace(/</g, "&lt;")
       .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
+
+})();
+
+/* ============================================================
+   Observer, Ground Track, Passes, Polar Plot
+   ============================================================ */
+(function () {
+  "use strict";
+
+  // ----------------------------------------------------------------
+  // Observer management
+  // ----------------------------------------------------------------
+  window.geocodeObserver = function () {
+    const q = (document.getElementById("obs-search").value || "").trim();
+    if (!q) return;
+    fetch("/api/geocode?q=" + encodeURIComponent(q))
+      .then(r => r.json())
+      .then(results => {
+        if (!Array.isArray(results) || results.length === 0) {
+          alert("Niciun rezultat găsit.");
+          return;
+        }
+        const first = results[0];
+        saveObserver({ lat: first.lat, lon: first.lon, name: first.name });
+      })
+      .catch(err => console.warn("Geocode error:", err));
+  };
+
+  window.useGPS = function () {
+    if (!navigator.geolocation) { alert("GPS indisponibil."); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        saveObserver({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          name: "Locație GPS",
+        });
+      },
+      err => alert("GPS eroare: " + err.message)
+    );
+  };
+
+  function saveObserver(obs) {
+    fetch("/api/observer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(obs),
+    })
+      .then(r => r.json())
+      .then(data => {
+        updateObserverUI(data);
+        // Refresh passes and ground track for current satellite
+        const sat = window.__CURRENT_SAT;
+        if (sat) { updateGroundTrack(sat); loadPasses(sat); }
+      })
+      .catch(err => console.warn("Save observer error:", err));
+  }
+
+  function updateObserverUI(obs) {
+    document.getElementById("obs-lat").textContent = (obs.lat || 0).toFixed(4);
+    document.getElementById("obs-lon").textContent = (obs.lon || 0).toFixed(4);
+    const nameParts = (obs.name || "").split(",");
+    document.getElementById("obs-name").textContent = nameParts[0].trim().slice(0, 30);
+  }
+
+  function loadObserver() {
+    fetch("/api/observer")
+      .then(r => r.json())
+      .then(data => updateObserverUI(data))
+      .catch(() => {});
+  }
+
+  // ----------------------------------------------------------------
+  // Ground track
+  // ----------------------------------------------------------------
+  let groundTrackLayers = { past: [], future: [] };
+
+  window.updateGroundTrack = function (satId) {
+    // Remove old layers
+    groundTrackLayers.past.forEach(l => { if (window.__MAP) window.__MAP.removeLayer(l); });
+    groundTrackLayers.future.forEach(l => { if (window.__MAP) window.__MAP.removeLayer(l); });
+    groundTrackLayers = { past: [], future: [] };
+
+    fetch(`/api/satellite/${encodeURIComponent(satId)}/groundtrack?past=30&future=90`)
+      .then(r => r.json())
+      .then(data => {
+        const m = window.__MAP;
+        if (!m) return;
+        (data.past || []).forEach(seg => {
+          if (seg.length < 2) return;
+          const layer = L.polyline(seg, {
+            color: "#00d4ff",
+            weight: 1.5,
+            opacity: 0.4,
+            dashArray: "4 4",
+          }).addTo(m);
+          groundTrackLayers.past.push(layer);
+        });
+        (data.future || []).forEach(seg => {
+          if (seg.length < 2) return;
+          const layer = L.polyline(seg, {
+            color: "#22ff88",
+            weight: 2,
+            opacity: 0.55,
+            dashArray: "6 3",
+          }).addTo(m);
+          groundTrackLayers.future.push(layer);
+        });
+      })
+      .catch(err => console.warn("Ground track error:", err));
+  };
+
+  // ----------------------------------------------------------------
+  // Pass predictions
+  // ----------------------------------------------------------------
+  window.loadPasses = function (satId) {
+    fetch(`/api/satellite/${encodeURIComponent(satId)}/passes?n=5&horizon=5`)
+      .then(r => r.json())
+      .then(data => renderPasses(data.passes || []))
+      .catch(err => console.warn("Passes error:", err));
+  };
+
+  function renderPasses(passes) {
+    const list = document.getElementById("passes-list");
+    if (!list) return;
+    if (passes.length === 0) {
+      list.innerHTML = '<div class="pass-none">Nicio trecere în 48h</div>';
+      return;
+    }
+    list.innerHTML = passes.map((p, i) => {
+      const aosTime = fmtPassTime(p.aos);
+      const tcaTime = fmtPassTime(p.tca);
+      const losTime = fmtPassTime(p.los);
+      const durMin = Math.floor(p.duration_s / 60);
+      const durSec = p.duration_s % 60;
+      const elCls = p.tca_el > 45 ? "el-high" : p.tca_el > 20 ? "el-mid" : "el-low";
+      return `<div class="pass-row">
+        <div class="pass-num">#${i + 1}</div>
+        <div class="pass-cells">
+          <div class="pass-cell"><span class="pass-lbl">AOS</span><span class="pass-time">${aosTime}</span><span class="pass-az">${p.aos_az}°</span></div>
+          <div class="pass-cell"><span class="pass-lbl">TCA</span><span class="pass-time">${tcaTime}</span><span class="pass-az ${elCls}">El ${p.tca_el}°</span></div>
+          <div class="pass-cell"><span class="pass-lbl">LOS</span><span class="pass-time">${losTime}</span><span class="pass-az">${p.los_az}°</span></div>
+        </div>
+        <div class="pass-dur">${durMin}m${durSec.toString().padStart(2,"0")}s</div>
+      </div>`;
+    }).join("");
+  }
+
+  function fmtPassTime(isoStr) {
+    if (!isoStr) return "—";
+    try {
+      const d = new Date(isoStr);
+      // Display in local time
+      return d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+             + " " + d.toLocaleDateString("ro-RO", { day: "2-digit", month: "2-digit" });
+    } catch (_) { return isoStr.slice(11, 19); }
+  }
+
+  // ----------------------------------------------------------------
+  // Observer geometry display
+  // ----------------------------------------------------------------
+  window.updateObserverGeo = function (obs) {
+    if (!obs) return;
+    const azEl = document.getElementById("pos-az");
+    const elEl = document.getElementById("pos-el");
+    const distEl = document.getElementById("pos-dist");
+    const dopEl = document.getElementById("pos-doppler");
+
+    if (azEl) azEl.textContent = obs.az != null ? obs.az.toFixed(1) + "°" : "—";
+    if (elEl) {
+      elEl.textContent = obs.el != null ? obs.el.toFixed(1) + "°" : "—";
+      if (elEl && obs.above_horizon !== undefined) {
+        elEl.style.color = obs.above_horizon ? "var(--green)" : "var(--text-dim)";
+      }
+    }
+    if (distEl) distEl.textContent = obs.dist_km != null ? obs.dist_km.toFixed(0) + " km" : "—";
+
+    // Doppler based on ISS downlink 145.800 MHz
+    if (dopEl && obs.range_rate_km_s != null) {
+      const freq_hz = 145.8e6;
+      const delta_hz = -freq_hz * obs.range_rate_km_s / 299792.458;
+      const sign = delta_hz >= 0 ? "+" : "";
+      dopEl.textContent = sign + delta_hz.toFixed(0) + " Hz";
+      dopEl.style.color = delta_hz > 0 ? "var(--green)" : delta_hz < 0 ? "var(--orange)" : "var(--accent)";
+    }
+
+    // Draw polar plot
+    drawPolarPlot(obs.az, obs.el);
+  };
+
+  // ----------------------------------------------------------------
+  // Polar plot
+  // ----------------------------------------------------------------
+  window.drawPolarPlot = function (az, el) {
+    const canvas = document.getElementById("polar-canvas");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+    const cx = W / 2;
+    const cy = H / 2;
+    const R = (W / 2) - 10;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Background
+    ctx.fillStyle = "#0a0e14";
+    ctx.fillRect(0, 0, W, H);
+
+    // Elevation circles: 0° (outer), 30°, 60°, 90° (center)
+    [0, 30, 60, 90].forEach(deg => {
+      const r = R * (1 - deg / 90);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = deg === 0 ? "rgba(0,212,255,0.4)" : "rgba(0,212,255,0.15)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      if (deg > 0 && deg < 90) {
+        ctx.fillStyle = "rgba(0,212,255,0.35)";
+        ctx.font = "9px monospace";
+        ctx.fillText(deg + "°", cx + r + 2, cy - 2);
+      }
+    });
+
+    // Crosshairs
+    ctx.strokeStyle = "rgba(0,212,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.stroke();
+
+    // Cardinal labels
+    ctx.fillStyle = "rgba(0,212,255,0.6)";
+    ctx.font = "bold 10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("N", cx, cy - R - 3);
+    ctx.fillText("S", cx, cy + R + 12);
+    ctx.textAlign = "left";
+    ctx.fillText("E", cx + R + 3, cy + 4);
+    ctx.textAlign = "right";
+    ctx.fillText("V", cx - R - 3, cy + 4);
+    ctx.textAlign = "center";
+
+    // Satellite dot
+    if (az != null && el != null) {
+      const elClamped = Math.max(0, Math.min(90, el));
+      const r_dot = R * (1 - elClamped / 90);
+      const az_rad = (az - 90) * Math.PI / 180;  // convert to canvas angle (N=up, E=right)
+      const sx = cx + r_dot * Math.cos(az_rad);
+      const sy = cy + r_dot * Math.sin(az_rad);
+
+      // Glow
+      const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, 10);
+      grd.addColorStop(0, el > 0 ? "rgba(34,255,136,0.8)" : "rgba(100,120,140,0.5)");
+      grd.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.beginPath();
+      ctx.arc(sx, sy, 10, 0, 2 * Math.PI);
+      ctx.fillStyle = grd;
+      ctx.fill();
+
+      // Dot
+      ctx.beginPath();
+      ctx.arc(sx, sy, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = el > 0 ? "#22ff88" : "#4a6080";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  };
+
+  // ----------------------------------------------------------------
+  // Expose __MAP reference for ground track layer management
+  // ----------------------------------------------------------------
+  document.addEventListener("DOMContentLoaded", function () {
+    // Wait for map to be initialized then grab reference
+    setTimeout(() => {
+      // Walk leaflet instances to find our map
+      const mapEl = document.getElementById("map");
+      if (mapEl && mapEl._leaflet_map) {
+        window.__MAP = mapEl._leaflet_map;
+      } else {
+        // Try getting from L.map instances
+        // The main IIFE exposes 'map' locally; use a MutationObserver workaround
+        // Instead, we rely on the 'map' being assigned to window by patching:
+        // We'll intercept after DOMContentLoaded + 400ms
+      }
+    }, 400);
+
+    loadObserver();
+
+    // Draw empty polar plot on load
+    setTimeout(() => drawPolarPlot(null, null), 500);
+
+    // Keyboard enter on observer search
+    const searchInput = document.getElementById("obs-search");
+    if (searchInput) {
+      searchInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") geocodeObserver();
+      });
+    }
+  });
 
 })();

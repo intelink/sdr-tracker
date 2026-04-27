@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone, date
 from pathlib import Path
 
+import numpy as np
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
@@ -970,8 +971,248 @@ def get_active_stations(sat_id: str, stations: list):
 
 
 # ---------------------------------------------------------------------------
+# Observer location (persistent)
+# ---------------------------------------------------------------------------
+OBSERVER_FILE = BASE / "observer.json"
+_observer = {"lat": 44.43, "lon": 26.1, "name": "București, România"}
+
+
+def _load_observer():
+    global _observer
+    try:
+        if OBSERVER_FILE.exists():
+            data = json.loads(OBSERVER_FILE.read_text())
+            if "lat" in data and "lon" in data:
+                _observer = data
+    except Exception as e:
+        log.warning(f"Could not load observer.json: {e}")
+
+
+def _save_observer():
+    try:
+        OBSERVER_FILE.write_text(json.dumps(_observer, indent=2, ensure_ascii=False))
+    except Exception as e:
+        log.warning(f"Could not save observer.json: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Observer geometry per satellite (az/el/distance/Doppler)
+# ---------------------------------------------------------------------------
+
+def compute_observer_geometry(sat_id: str, obs_lat: float, obs_lon: float):
+    """Return az, el, dist_km, range_rate_km_s, above_horizon for sat from observer."""
+    tle = get_tle(sat_id)
+    if not tle:
+        return None
+    name, line1, line2 = tle
+    try:
+        satellite = EarthSatellite(line1, line2, name, _ts_skyfield)
+        observer = wgs84.latlon(obs_lat, obs_lon)
+        t = _ts_skyfield.now()
+        difference = satellite - observer
+        topocentric = difference.at(t)
+        alt, az, dist = topocentric.altaz()
+        pos = topocentric.position.km
+        vel = topocentric.velocity.km_per_s
+        dist_km = dist.km
+        if dist_km > 0:
+            range_rate = sum(p * v for p, v in zip(pos, vel)) / dist_km
+        else:
+            range_rate = 0.0
+        return {
+            "az": round(float(az.degrees), 1),
+            "el": round(float(alt.degrees), 1),
+            "dist_km": round(float(dist_km), 1),
+            "range_rate_km_s": round(float(range_rate), 4),
+            "above_horizon": bool(alt.degrees > 0),
+        }
+    except Exception as e:
+        log.warning(f"Observer geometry error for {sat_id}: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Pass predictions
+# ---------------------------------------------------------------------------
+
+def compute_passes(sat_id: str, obs_lat: float, obs_lon: float, n: int = 5, horizon: float = 5.0):
+    """Return up to n upcoming passes for sat_id visible from observer."""
+    tle = get_tle(sat_id)
+    if not tle:
+        return []
+    name, line1, line2 = tle
+    try:
+        satellite = EarthSatellite(line1, line2, name, _ts_skyfield)
+        observer = wgs84.latlon(obs_lat, obs_lon)
+        t0 = _ts_skyfield.now()
+        t1 = _ts_skyfield.tt_jd(t0.tt + 2.0)  # 48 hours window
+
+        times, events = satellite.find_events(observer, t0, t1, altitude_degrees=horizon)
+
+        passes = []
+        aos_t = None
+        aos_az = 0
+        tca_t = None
+        tca_el = 0
+        tca_az = 0
+        for ti, event in zip(times, events):
+            ev = int(event)
+            if ev == 0:  # AOS
+                aos_t = ti
+                tca_t = None
+                diff = satellite - observer
+                topo = diff.at(ti)
+                _, az_aos, _ = topo.altaz()
+                aos_az = round(az_aos.degrees, 1)
+            elif ev == 1 and (aos_t is not None):  # TCA
+                tca_t = ti
+                diff = satellite - observer
+                topo = diff.at(ti)
+                alt_tca, az_tca, _ = topo.altaz()
+                tca_el = round(alt_tca.degrees, 1)
+                tca_az = round(az_tca.degrees, 1)
+            elif ev == 2 and (aos_t is not None):  # LOS
+                diff = satellite - observer
+                topo = diff.at(ti)
+                _, az_los, _ = topo.altaz()
+                aos_dt = aos_t.utc_datetime()
+                tca_dt = (tca_t if tca_t is not None else ti).utc_datetime()
+                los_dt = ti.utc_datetime()
+                duration = (los_dt - aos_dt).total_seconds()
+                passes.append({
+                    "aos": aos_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "aos_az": aos_az,
+                    "tca": tca_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "tca_el": tca_el,
+                    "tca_az": tca_az,
+                    "los": los_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "los_az": round(az_los.degrees, 1),
+                    "duration_s": round(duration),
+                })
+                aos_t = None
+                tca_t = None
+                if len(passes) >= n:
+                    break
+
+        return passes
+    except Exception as e:
+        log.warning(f"Pass prediction error for {sat_id}: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Ground track
+# ---------------------------------------------------------------------------
+
+def compute_ground_track(sat_id: str, past_min: int = 30, future_min: int = 90):
+    """Return past and future ground track split at antimeridian."""
+    tle = get_tle(sat_id)
+    if not tle:
+        return {"past": [], "future": []}
+    name, line1, line2 = tle
+    try:
+        satellite = EarthSatellite(line1, line2, name, _ts_skyfield)
+        now_jd = _ts_skyfield.now().tt
+
+        offsets = np.linspace(-past_min / 1440.0, future_min / 1440.0, (past_min + future_min) * 2)
+        times = _ts_skyfield.tt_jd(now_jd + offsets)
+        geocentric = satellite.at(times)
+        subpoints = wgs84.subpoint_of(geocentric)
+        lats = subpoints.latitude.degrees
+        lons = subpoints.longitude.degrees
+
+        split_idx = past_min * 2  # past portion length
+
+        def split_antimeridian(lat_arr, lon_arr):
+            """Split track at antimeridian jumps >180 degrees."""
+            segments = []
+            seg = [[float(lat_arr[0]), float(lon_arr[0])]]
+            for i in range(1, len(lat_arr)):
+                if abs(float(lon_arr[i]) - float(lon_arr[i - 1])) > 180:
+                    segments.append(seg)
+                    seg = []
+                seg.append([float(lat_arr[i]), float(lon_arr[i])])
+            segments.append(seg)
+            return segments
+
+        past_segs = split_antimeridian(lats[:split_idx], lons[:split_idx])
+        future_segs = split_antimeridian(lats[split_idx:], lons[split_idx:])
+
+        return {"past": past_segs, "future": future_segs}
+    except Exception as e:
+        log.warning(f"Ground track error for {sat_id}: {e}")
+        return {"past": [], "future": []}
+
+
+# ---------------------------------------------------------------------------
 # API Routes
 # ---------------------------------------------------------------------------
+
+@app.route("/api/observer", methods=["GET", "POST"])
+def api_observer():
+    global _observer
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        if "lat" in data and "lon" in data:
+            _observer = {
+                "lat": float(data["lat"]),
+                "lon": float(data["lon"]),
+                "name": data.get("name", ""),
+            }
+            _save_observer()
+        return jsonify(_observer)
+    return jsonify(_observer)
+
+
+@app.route("/api/geocode")
+def api_geocode():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"error": "No query"}), 400
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": q, "format": "json", "limit": 5},
+            headers={"User-Agent": "SDR-Tracker/1.0 (sdr_tracker@local)"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        results = r.json()
+        simplified = [
+            {
+                "name": item.get("display_name", "")[:80],
+                "lat": float(item["lat"]),
+                "lon": float(item["lon"]),
+            }
+            for item in results
+        ]
+        return jsonify(simplified)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/satellite/<sat_id>/passes")
+def api_satellite_passes(sat_id):
+    sat_id = sat_id.upper()
+    if sat_id not in SAT_DB:
+        return jsonify({"error": "Satelit necunoscut"}), 404
+    n = request.args.get("n", 5, type=int)
+    horizon = request.args.get("horizon", 5.0, type=float)
+    obs = _observer
+    passes = compute_passes(sat_id, obs["lat"], obs["lon"], n=n, horizon=horizon)
+    return jsonify({"sat_id": sat_id, "observer": obs, "passes": passes})
+
+
+@app.route("/api/satellite/<sat_id>/groundtrack")
+def api_satellite_groundtrack(sat_id):
+    sat_id = sat_id.upper()
+    if sat_id not in SAT_DB:
+        return jsonify({"error": "Satelit necunoscut"}), 404
+    past = request.args.get("past", 30, type=int)
+    future = request.args.get("future", 90, type=int)
+    track = compute_ground_track(sat_id, past_min=past, future_min=future)
+    return jsonify({"sat_id": sat_id, **track})
+
 
 @app.route("/")
 def index():
@@ -1022,11 +1263,14 @@ def api_satellite_position(sat_id):
 
     stations = get_stations()
     active = get_active_stations(sat_id, stations)
+    obs = _observer
+    obs_geo = compute_observer_geometry(sat_id, obs["lat"], obs["lon"])
 
     return jsonify({
         "sat_id": sat_id,
         "position": pos,
         "active_stations": active,
+        "observer": obs_geo,
     })
 
 
@@ -1364,10 +1608,13 @@ def stream():
                 if pos:
                     stations = get_stations()
                     active = get_active_stations(sat_id, stations)
+                    obs = _observer
+                    obs_geo = compute_observer_geometry(sat_id, obs["lat"], obs["lon"])
                     payload = json.dumps({
                         "sat_id": sat_id,
                         "position": pos,
                         "active_stations": active,
+                        "observer": obs_geo,
                     })
                     yield f"data: {payload}\n\n"
                 else:
@@ -1409,6 +1656,7 @@ def _periodic_stations_refresh():
 
 if __name__ == "__main__":
     _load_known_stations()
+    _load_observer()
     threading.Thread(target=_prefetch_all_tle, daemon=True).start()
     threading.Thread(target=_background_tle_refresh, daemon=True).start()
     threading.Thread(target=_refresh_stations_cache, daemon=True).start()

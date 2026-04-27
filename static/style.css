@@ -1068,6 +1068,198 @@ html, body {
 #ai-model-select option { background: #0f1520; color: var(--text-primary); }
 #ai-model-select optgroup { background: #0a0e14; color: var(--accent); font-size: 10px; }
 
+/* ============================================================
+   Observer Panel
+   ============================================================ */
+
+#observer-panel {
+  flex-shrink: 0;
+  background: var(--bg-dark);
+  border-top: 1px solid var(--border);
+  padding: 8px 14px;
+}
+
+.obs-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+#obs-search-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+#obs-search {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 4px 7px;
+  font-size: 11px;
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+}
+#obs-search:focus { border-color: var(--accent); }
+#obs-search::placeholder { color: var(--text-dim); }
+
+#obs-search-row button {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+#obs-search-row button:hover {
+  background: rgba(0,212,255,0.1);
+  border-color: var(--accent);
+}
+
+#obs-coords {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'Courier New', monospace;
+}
+#obs-coords span {
+  color: var(--accent);
+}
+
+/* ============================================================
+   Polar Plot
+   ============================================================ */
+
+#polar-wrap {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 6px 0 2px;
+  background: var(--bg-dark);
+  border-top: 1px solid var(--border);
+}
+
+#polar-canvas {
+  border-radius: 50%;
+  background: #0a0e14;
+  display: block;
+}
+
+/* ============================================================
+   Passes Panel
+   ============================================================ */
+
+#passes-panel {
+  flex-shrink: 0;
+  background: var(--bg-dark);
+  border-top: 1px solid var(--border);
+  padding: 8px 14px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.passes-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.passes-title span {
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.pass-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.pass-row:last-child {
+  border-bottom: none;
+}
+
+.pass-num {
+  color: var(--text-dim);
+  font-weight: 700;
+  min-width: 18px;
+  font-family: monospace;
+  padding-top: 1px;
+}
+
+.pass-cells {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pass-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 60px;
+}
+
+.pass-lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.pass-time {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.pass-az {
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.pass-az.el-high { color: var(--green); }
+.pass-az.el-mid  { color: var(--yellow); }
+.pass-az.el-low  { color: var(--text-muted); }
+
+.pass-dur {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: var(--accent);
+  white-space: nowrap;
+  padding-top: 1px;
+  min-width: 40px;
+  text-align: right;
+}
+
+.pass-none {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+  text-align: center;
+  padding: 6px 0;
+}
+
 /* Station open button inside AI messages */
 .ai-station-btn {
   display: inline-flex;

@@ -116,6 +116,17 @@
       {% endfor %}
     </div>
 
+    <!-- Observer location panel -->
+    <div id="observer-panel">
+      <div class="obs-title">📍 Locația mea</div>
+      <div id="obs-search-row">
+        <input id="obs-search" type="text" placeholder="Caută oraș..." />
+        <button onclick="geocodeObserver()">Caută</button>
+        <button onclick="useGPS()" title="GPS">⊕</button>
+      </div>
+      <div id="obs-coords">Lat: <span id="obs-lat">44.43</span>° · Lon: <span id="obs-lon">26.10</span>° · <span id="obs-name">București</span></div>
+    </div>
+
     <!-- Position panel -->
     <div id="pos-panel">
       <div class="pos-title">Poziție curentă: <span id="pos-sat-name">—</span></div>
@@ -136,12 +147,39 @@
           <span class="pos-label">Footprint</span>
           <span class="pos-val" id="pos-fp">—</span>
         </div>
+        <div class="pos-item">
+          <span class="pos-label">Azimut</span>
+          <span class="pos-val" id="pos-az">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Elevație</span>
+          <span class="pos-val" id="pos-el">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Distanță</span>
+          <span class="pos-val" id="pos-dist">—</span>
+        </div>
+        <div class="pos-item">
+          <span class="pos-label">Doppler</span>
+          <span class="pos-val" id="pos-doppler">—</span>
+        </div>
       </div>
       <div id="active-sdr-count">Stații SDR active: <span id="active-count">0</span></div>
       <div id="stream-status">
         <span class="status-dot" id="stream-dot"></span>
         <span id="stream-text">Nicio urmărire activă</span>
       </div>
+    </div>
+
+    <!-- Polar plot -->
+    <div id="polar-wrap">
+      <canvas id="polar-canvas" width="180" height="180"></canvas>
+    </div>
+
+    <!-- Pass predictions -->
+    <div id="passes-panel">
+      <div class="passes-title">Treceri următoare <span id="passes-sat-name"></span></div>
+      <div id="passes-list"></div>
     </div>
   </aside>
 
